@@ -1,3 +1,4 @@
+use mnist::{Mnist, MnistBuilder};
 use rand::Rng;
 
 #[derive(Debug)]
@@ -168,25 +169,105 @@ fn predict(network: &Network, inputs: &[f64]) -> Vec<f64> {
     network.forward(inputs).last().unwrap().to_vec()
 }
 
+fn convert_to_image_vectors(flat_images: &[u8], image_size: usize) -> Vec<Vec<u8>> {
+    let num_images = flat_images.len() / image_size;
+    let mut result = Vec::with_capacity(num_images);
+
+    for img_idx in 0..num_images {
+        let start = img_idx * image_size;
+        let end = start + image_size;
+        let image = flat_images[start..end].to_vec();
+        result.push(image);
+    }
+
+    result
+}
+
+fn print_image(image_vec: &[f64]) {
+    for y in 0..28 {
+        for x in 0..28 {
+            let pixel = image_vec[y * 28 + x];
+            // Print a basic ASCII representation
+            if pixel > 0.5 {
+                print!("#");
+            } else {
+                print!(" ");
+            }
+        }
+        println!();
+    }
+}
+
+fn one_hot_encode_labels(labels: &[u8], num_classes: usize) -> Vec<Vec<f64>> {
+    labels
+        .iter()
+        .map(|&label| {
+            let mut one_hot = vec![0.0; num_classes];
+            one_hot[label as usize] = 1.0; // Set the correct class index to 1.0
+            one_hot
+        })
+        .collect()
+}
+
 fn main() {
-    let layer_sizes = vec![2, 250, 1];
+    const LEARNING_RATE: f64 = 0.2;
+    const EPOCHS: usize = 5;
+    let layer_sizes = vec![784, 128, 10];
+
     let mut network = Network::new(&layer_sizes);
-    println!("Starting training of {network:?}");
 
-    let data = vec![
-        (vec![0.0, 0.0], vec![0.0]),
-        (vec![1.0, 0.0], vec![1.0]),
-        (vec![0.0, 1.0], vec![1.0]),
-        (vec![1.0, 1.0], vec![0.0]),
-    ];
+    let Mnist {
+        trn_img: mnist_training_images,
+        trn_lbl: mnist_training_labels,
+        tst_img: mnist_test_images,
+        tst_lbl: mnist_test_labels,
+        ..
+    } = MnistBuilder::new()
+        .label_format_digit()
+        .training_set_length(50_000)
+        .test_set_length(10)
+        .finalize();
 
-    train(&mut network, &data, 0.1, 50000);
+    println!("Loaded {} training images", mnist_training_labels.len());
+    println!("Loaded {} test images", mnist_test_labels.len());
 
-    for (inputs, expected) in &data {
-        let output = predict(&network, inputs);
+    let training_images: Vec<Vec<f64>> = convert_to_image_vectors(&mnist_training_images, 28 * 28)
+        .into_iter()
+        .map(|img| img.into_iter().map(|x| x as f64 / 255.0).collect())
+        .collect();
+
+    let training_labels = one_hot_encode_labels(&mnist_training_labels, 10);
+    let training_data: Vec<(Vec<f64>, Vec<f64>)> =
+        training_images.into_iter().zip(training_labels).collect();
+
+    train(&mut network, &training_data, LEARNING_RATE, EPOCHS);
+
+    let test_images: Vec<Vec<f64>> = convert_to_image_vectors(&mnist_test_images, 28 * 28)
+        .into_iter()
+        .map(|img| img.into_iter().map(|x| x as f64 / 255.0).collect())
+        .collect();
+    let test_labels = one_hot_encode_labels(&mnist_test_labels, 10);
+    let test_data: Vec<(Vec<f64>, Vec<f64>)> = test_images.into_iter().zip(test_labels).collect();
+
+    for (input, expected) in &test_data {
+        let output = predict(&network, input);
+        let predicted_class = output
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        let expected_class = expected
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+
+        print_image(input);
         println!(
-            "Input: {:?} => Prediction: {:?}, Expected: {:?}",
-            inputs, output, expected
-        );
+            "Prediction: {:?}, Expected: {:?}",
+            predicted_class, expected_class
+        )
     }
 }
